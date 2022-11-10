@@ -18,7 +18,7 @@ func Operate(ctx context.Context, opt Options) error {
 	defer cancel()
 
 	in := make(chan func() error, opt.Concurrency)
-	out := make(chan error, opt.Concurrency)
+	out := make(chan error, opt.Max)
 
 	var firstErr error
 
