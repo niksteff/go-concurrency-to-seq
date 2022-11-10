@@ -28,12 +28,11 @@ func TestOperation(t *testing.T) {
 		Incr:        1000,
 		Concurrency: 5,
 		Operation: func(ctx context.Context, incr int) error {
-			defer s.Mtx.Unlock()
 			s.Mtx.Lock()
-
 			if s.Sum+incr < 10_000 {
 				s.Sum += incr
 			}
+			s.Mtx.Unlock()
 			return nil
 		},
 	}
@@ -50,7 +49,7 @@ func TestOperationFail(t *testing.T) {
 	defer cancel()
 
 	stopSize := 5_000
-	
+
 	s := TestSum{
 		Sum: 0,
 	}
@@ -60,18 +59,17 @@ func TestOperationFail(t *testing.T) {
 		Concurrency: 5,
 		Incr:        1000,
 		Operation: func(ctx context.Context, incr int) error {
-			defer s.Mtx.Unlock()
-
 			select {
 			case <-ctx.Done():
 				return nil
 			default:
 				s.Mtx.Lock()
 				s.Sum += incr
-
 				if s.Sum > stopSize {
+					s.Mtx.Unlock()
 					return fmt.Errorf("size too large at %d", stopSize)
 				}
+				s.Mtx.Unlock()
 
 				return nil
 			}

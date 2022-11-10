@@ -37,9 +37,13 @@ func Operate(ctx context.Context, opt Options) error {
 				if !ok {
 					return
 				}
+				if e != nil && firstErr != nil {
+					log.Printf("another error: %s", e.Error())
+				}
 				if e != nil && firstErr == nil {
 					log.Printf("storing first error: %s", e.Error())
 					firstErr = e
+					cancel()
 				}
 			}
 		}
