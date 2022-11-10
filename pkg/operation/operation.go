@@ -9,7 +9,8 @@ import (
 type Options struct {
 	Max         int
 	Concurrency int
-	Operation   func(context.Context, int, *int) error
+	Incr        int
+	Operation   func(context.Context, int) error
 }
 
 func Operate(ctx context.Context, opt Options) error {
@@ -17,33 +18,38 @@ func Operate(ctx context.Context, opt Options) error {
 	defer cancel()
 
 	in := make(chan func() error, opt.Concurrency)
-	out := make(chan error)
+	out := make(chan error, opt.Concurrency)
 
 	var firstErr error
 
 	// error handler
 	var wgErr sync.WaitGroup
 	wgErr.Add(1)
-	go func(wg *sync.WaitGroup, out <-chan error) {
+	go func(ctx context.Context, wg *sync.WaitGroup, out <-chan error) {
 		defer wg.Done()
 		defer cancel()
 
-		for e := range out {
-			if e != nil {
-				log.Printf("receiving error: %s", e.Error())
-			}
-			if e != nil && firstErr == nil {
-				log.Printf("storing first error: %s", e.Error())
-				firstErr = e
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case e, ok := <-out:
+				if !ok {
+					return
+				}
+				if e != nil && firstErr == nil {
+					log.Printf("storing first error: %s", e.Error())
+					firstErr = e
+				}
 			}
 		}
-	}(&wgErr, out)
+	}(ctx, &wgErr, out)
 
 	// worker
 	var wg sync.WaitGroup
 	for i := 0; i < opt.Concurrency; i++ {
 		wg.Add(1)
-		go func(wg *sync.WaitGroup, id int, ctx context.Context, in <-chan func() error, out chan<- error) {
+		go func(ctx context.Context, wg *sync.WaitGroup, id int, in <-chan func() error, out chan<- error) {
 			defer wg.Done()
 			defer log.Printf("worker #%d: stopping", id)
 			log.Printf("worker #%d: starting", id)
@@ -51,34 +57,45 @@ func Operate(ctx context.Context, opt Options) error {
 			for {
 				select {
 				case <-ctx.Done():
+					log.Printf("worker #%d: ctx.Done", id)
 					return
 				case op, ok := <-in:
 					if !ok {
 						return
 					}
-
+					// log.Printf("worker #%d: operating", id)
 					out <- op()
 				}
 			}
-		}(&wg, i, ctx, in, out)
+		}(ctx, &wg, i, in, out)
 	}
 
 	// generator
-	sum := 0
-	for i := 0; i < opt.Max; i++ {
-		if firstErr != nil {
-			log.Printf("generator: stopping")
-			break
+	var wgGen sync.WaitGroup
+	wgGen.Add(1)
+	go func(ctx context.Context, wg *sync.WaitGroup, in chan<- func() error) {
+		defer wg.Done()
+		
+		for i := 0; i < opt.Max; i++ {
+			select {
+			case <-ctx.Done():
+				log.Printf("generator: ctx.Done")
+				return
+			default:
+				// log.Printf("generator: generating")
+				in <- func() error {
+					return opt.Operation(ctx, opt.Incr)
+				}
+			}
 		}
 
-		in <- func() error {
-			return opt.Operation(ctx, 1, &sum)
-		}
-	}
-	close(in)
+		close(in)
+	}(ctx, &wgGen, in)
+	wgGen.Wait()
+
 	wg.Wait()
-	
 	close(out)
+	
 	wgErr.Wait()
 
 	return firstErr

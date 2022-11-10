@@ -3,25 +3,36 @@ package operation_test
 import (
 	"context"
 	"fmt"
-	"log"
+	"sync"
 	"testing"
 	"time"
 
 	"example.com/go-concurrency/pkg/operation"
 )
 
+type TestSum struct {
+	Mtx sync.Mutex
+	Sum int
+}
+
 func TestOperation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
- 
+
+	s := TestSum{
+		Sum: 0,
+	}
+
 	opt := operation.Options{
 		Max:         10_000,
+		Incr:        1000,
 		Concurrency: 5,
-		Operation: func(ctx context.Context, incr int, sum *int) error {
-			log.Printf("sum: %d, incr: %d", *sum, incr)
-			if *sum + incr < 10_000 {
-				*sum += incr
-				log.Printf("result: %d", *sum)
+		Operation: func(ctx context.Context, incr int) error {
+			defer s.Mtx.Unlock()
+			s.Mtx.Lock()
+
+			if s.Sum+incr < 10_000 {
+				s.Sum += incr
 			}
 			return nil
 		},
@@ -39,20 +50,26 @@ func TestOperationFail(t *testing.T) {
 	defer cancel()
 
 	stopSize := 5_000
+	
+	s := TestSum{
+		Sum: 0,
+	}
 
 	opt := operation.Options{
 		Max:         10_000,
 		Concurrency: 5,
-		Operation: func(ctx context.Context, incr int, sum *int) error {
+		Incr:        1000,
+		Operation: func(ctx context.Context, incr int) error {
+			defer s.Mtx.Unlock()
+
 			select {
 			case <-ctx.Done():
 				return nil
 			default:
-				// log.Printf("sum: %d, incr: %d", *sum, incr)
-				*sum += incr
-				// log.Printf("result: %d", *sum)
+				s.Mtx.Lock()
+				s.Sum += incr
 
-				if *sum > stopSize {
+				if s.Sum > stopSize {
 					return fmt.Errorf("size too large at %d", stopSize)
 				}
 
