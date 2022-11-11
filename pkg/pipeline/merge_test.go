@@ -4,17 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math/rand"
 	"testing"
-	"time"
 
 	"example.com/go-concurrency/pkg/pipeline"
 )
 
 func TestMerge(t *testing.T) {
 	numWorkers := 10
-	numOfValues := 10
-	expectedValues := numOfValues * numWorkers
+	numOfCounts := 10
+	expectedValues := numOfCounts * numWorkers
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -23,7 +21,7 @@ func TestMerge(t *testing.T) {
 	inputChannels := make([]<-chan int, 0, numWorkers)
 	errChannels := make([]<-chan error, 0, numWorkers)
 	for i := 0; i < numWorkers; i++ {
-		data, errs := numberGenerator(ctx, 0, 10, numOfValues)
+		data, errs := numberCounter(ctx, 0, numOfCounts)
 
 		inputChannels = append(inputChannels, data)
 		errChannels = append(errChannels, errs)
@@ -43,7 +41,7 @@ func TestMerge(t *testing.T) {
 
 func TestMergeError(t *testing.T) {
 	numWorkers := 10
-	numOfValues := 10
+	numOfCounts := 1001
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -52,7 +50,7 @@ func TestMergeError(t *testing.T) {
 	inputChannels := make([]<-chan int, 0, numWorkers)
 	errChannels := make([]<-chan error, 0, numWorkers)
 	for i := 0; i < numWorkers; i++ {
-		data, errs := numberGenerator(ctx, 0, 1000, numOfValues)
+		data, errs := numberCounter(ctx, 1001, numOfCounts)
 
 		inputChannels = append(inputChannels, data)
 		errChannels = append(errChannels, errs)
@@ -65,8 +63,8 @@ func TestMergeError(t *testing.T) {
 	mergedErrs := pipeline.Merge(ctx, errChannels...)
 
 	_, errs := sink(ctx, cancel, mergedData, mergedErrs)
-	if len(errs) < 1 {
-		t.Errorf("expected to receive at least 1 error but got %d", len(errs))
+	if len(errs) != 10 {
+		t.Errorf("expected to receive at least 10 error but got %d", len(errs))
 	}
 
 	t.Logf("len errors: %d", len(errs))
@@ -85,12 +83,12 @@ func (e MaxError) Error() string {
 	return fmt.Sprintf("the max value %d is greater than the allowed value of %d", e.Given, e.Allowed)
 }
 
-// numberGenerator will generate n integers between min, max
-func numberGenerator(ctx context.Context, min int, max int, n int) (<-chan int, <-chan error) {
+// numberCounter will generate n integers between min, max
+func numberCounter(ctx context.Context, start int, n int) (<-chan int, <-chan error) {
 	out := make(chan int)
 	errs := make(chan error)
 
-	maxAllowed := 999
+	maxAllowed := 1000
 
 	go func() {
 		defer close(out)
@@ -101,18 +99,17 @@ func numberGenerator(ctx context.Context, min int, max int, n int) (<-chan int, 
 			case <-ctx.Done():
 				return
 			default:
-				if max > maxAllowed {
+				if start > maxAllowed {
 					err := MaxError{
 						Allowed: maxAllowed,
-						Given:   max,
+						Given:   start,
 					}
 					errs <- err
 					return
 				}
 
-				rand.Seed(time.Now().UnixNano())
-				val := rand.Intn(max-min+1) + min
-				out <- val 
+				// just count up as many times as the user wants
+				out <- i
 			}
 		}
 	}()
@@ -124,22 +121,39 @@ func sink(ctx context.Context, cancel context.CancelFunc, data <-chan int, errs 
 	counter := 0
 	aggrErrs := make([]error, 0)
 
+	okData, okErr := true, true
+	// var d int
+	var err error
+
+loop:
 	for {
 		select {
-		case _, ok := <-data:
-			if ok {
-				counter++
-			}
-		case err, ok := <-errs:
-			if !ok {
-				cancel()
-			}
-			if err != nil {
-				aggrErrs = append(aggrErrs, err)
-			}
 		case <-ctx.Done():
-			log.Printf("sink: ctx done: %v", ctx.Err().Error())
+			log.Printf("sink: ctx done: %v, data: %d", ctx.Err().Error(), len(data))
 			return counter, aggrErrs
+		case _, okData = <-data:
+			if okData {
+				// log.Printf("data: %d", d)
+				counter++
+			} else if !okErr {
+				break loop
+			}
+		case err, okErr = <-errs:
+			if okErr {
+				log.Printf("reading err")
+				if err != nil {
+					aggrErrs = append(aggrErrs, err)
+				}
+			} else if !okData {
+				break loop
+			}
 		}
 	}
+
+	if !okData && !okErr {
+		log.Printf("cancelling context => okData: %t, okErr: %t", okData, okErr)
+		cancel()
+	}
+
+	return counter, aggrErrs
 }

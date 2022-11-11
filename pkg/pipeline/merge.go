@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"log"
 	"sync"
 )
 
@@ -36,8 +37,10 @@ func Merge[T any](ctx context.Context, in ...<-chan T) <-chan T {
 
 	// wait for the merge to complete before closing the out channel
 	go func(wg *sync.WaitGroup) {
+		log.Println("merge: waiting")
 		wg.Wait()
 		close(out)
+		log.Println("merge: closed")
 	}(&wg)
 
 	return out
