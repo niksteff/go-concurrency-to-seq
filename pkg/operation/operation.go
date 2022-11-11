@@ -2,8 +2,8 @@ package operation
 
 import (
 	"context"
-	"log"
-	"sync"
+
+	"example.com/go-concurrency/pkg/pipeline"
 )
 
 type Options struct {
@@ -13,88 +13,95 @@ type Options struct {
 	Operation   func(context.Context, int) error
 }
 
-func Operate(ctx context.Context, opt Options) <-chan error {
+func Do(ctx context.Context, opt Options) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	in := make(chan func() error, opt.Concurrency)
-	out := make(chan error)
+	// our errors will be stored in here
+	errChans := make([]<-chan error, 0)
+	
+	// generate the jobs from the options
+	jobs := generate(ctx, opt)
 
-	// var firstErr error
-
-	// error handler
-	// var wgErr sync.WaitGroup
-	// wgErr.Add(1)
-	// go func(ctx context.Context, wg *sync.WaitGroup, out <-chan error) {
-	// 	defer wg.Done()
-	// 	defer cancel()
-
-	// 	for {
-	// 		select {
-	// 		case <-ctx.Done():
-	// 			return
-	// 		case e, ok := <-out:
-	// 			if !ok {
-	// 				return
-	// 			}
-	// 			if e != nil && firstErr != nil {
-	// 				log.Printf("another error: %s", e.Error())
-	// 			}
-	// 			if e != nil && firstErr == nil {
-	// 				log.Printf("storing first error: %s", e.Error())
-	// 				firstErr = e
-	// 				cancel()
-	// 			}
-	// 		}
-	// 	}
-	// }(ctx, &wgErr, out)
-
-	// worker
-	var wg sync.WaitGroup
+	// start the operators concurrently based on the setting
 	for i := 0; i < opt.Concurrency; i++ {
-		wg.Add(1)
-		go func(ctx context.Context, wg *sync.WaitGroup, id int, in <-chan func() error, out chan<- error) {
-			defer wg.Done()
-			defer log.Printf("worker #%d: stopping", id)
-			log.Printf("worker #%d: starting", id)
-
-			for {
-				select {
-				case <-ctx.Done():
-					log.Printf("worker #%d: ctx.Done", id)
-					return
-				case op, ok := <-in:
-					if !ok {
-						return
-					}
-					// log.Printf("worker #%d: operating", id)
-					out <- op()
-				}
-			}
-		}(ctx, &wg, i, in, out)
+		err := operate(ctx, jobs)
+		errChans = append(errChans, err)
 	}
 
-	// generator
-	var wgGen sync.WaitGroup
-	wgGen.Add(1)
-	go func(ctx context.Context, wg *sync.WaitGroup, in chan<- func() error) {
+	// merge the incoming errors from the concurrent calls
+	mergedErrs := pipeline.Merge(ctx, errChans...)
+
+	// store our first error and return it
+	firstErr := sink(ctx, mergedErrs)
+
+	return firstErr
+}
+
+// sink will store the first error to arrive for returning it
+func sink(ctx context.Context, in <-chan error) error {
+	var firstErr error
+
+	for {
+		select {
+		case <-ctx.Done():
+			return firstErr
+		case err, ok := <-in:
+			if !ok {
+				return firstErr
+			}
+
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+}
+
+// operate will perform the incoming actions and write the result to the return chan
+func operate(ctx context.Context, in <-chan func() error) <-chan error {
+	out := make(chan error)
+
+	go func() {
+		defer close(out)
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case op, ok := <-in:
+				if !ok {
+					return
+				}
+				err := op()
+				if err != nil {
+					out <- err
+				}
+			}
+		}
+	}()
+
+	return out
+}
+
+// generate operations from the options
+func generate(ctx context.Context, opt Options) <-chan func() error {
+	out := make(chan func() error)
+
+	go func() {
+		defer close(out)
+
 		for i := 0; i < opt.Max; i++ {
 			select {
 			case <-ctx.Done():
-				log.Printf("generator: ctx.Done")
 				return
 			default:
-				// log.Printf("generator: generating")
-				in <- func() error {
+				out <- func() error {
 					return opt.Operation(ctx, opt.Incr)
 				}
 			}
 		}
-
-		close(in)
-		wg.Wait()
-		close(out)
-	}(ctx, &wg, in)
+	}()
 
 	return out
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"example.com/go-concurrency/pkg/operation"
@@ -22,7 +23,14 @@ func main() {
 		},
 	}
 
-	operation.Operate(ctx, opt)
+	err := operation.Do(ctx, opt)
+
+	if err!= nil {
+		log.Printf("erro: %s", err.Error())
+		return
+	}
+
+	log.Println("all good.")
 }
 
 
