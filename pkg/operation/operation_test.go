@@ -37,10 +37,12 @@ func TestOperation(t *testing.T) {
 		},
 	}
 
-	err := operation.Operate(ctx, opt)
-	if err != nil {
-		t.Errorf("did not expect error: %s", err.Error())
-		t.FailNow()
+	errs := operation.Operate(ctx, opt)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("did not expect error: %s", err.Error())
+			t.FailNow()
+		}
 	}
 }
 
@@ -76,9 +78,15 @@ func TestOperationFail(t *testing.T) {
 		},
 	}
 
-	err := operation.Operate(ctx, opt)
-	if err == nil {
-		t.Error("did expect error but got none!")
-		t.FailNow()
+	errs := operation.Operate(ctx, opt)
+	for err := range errs {
+		if err == nil {
+			t.Error("did expect error but got none!")
+			t.FailNow()
+		}
+
+		if err != nil {
+			cancel()
+		}
 	}
 }

@@ -13,41 +13,41 @@ type Options struct {
 	Operation   func(context.Context, int) error
 }
 
-func Operate(ctx context.Context, opt Options) error {
+func Operate(ctx context.Context, opt Options) <-chan error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	in := make(chan func() error, opt.Concurrency)
-	out := make(chan error, opt.Max)
+	out := make(chan error)
 
-	var firstErr error
+	// var firstErr error
 
 	// error handler
-	var wgErr sync.WaitGroup
-	wgErr.Add(1)
-	go func(ctx context.Context, wg *sync.WaitGroup, out <-chan error) {
-		defer wg.Done()
-		defer cancel()
+	// var wgErr sync.WaitGroup
+	// wgErr.Add(1)
+	// go func(ctx context.Context, wg *sync.WaitGroup, out <-chan error) {
+	// 	defer wg.Done()
+	// 	defer cancel()
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case e, ok := <-out:
-				if !ok {
-					return
-				}
-				if e != nil && firstErr != nil {
-					log.Printf("another error: %s", e.Error())
-				}
-				if e != nil && firstErr == nil {
-					log.Printf("storing first error: %s", e.Error())
-					firstErr = e
-					cancel()
-				}
-			}
-		}
-	}(ctx, &wgErr, out)
+	// 	for {
+	// 		select {
+	// 		case <-ctx.Done():
+	// 			return
+	// 		case e, ok := <-out:
+	// 			if !ok {
+	// 				return
+	// 			}
+	// 			if e != nil && firstErr != nil {
+	// 				log.Printf("another error: %s", e.Error())
+	// 			}
+	// 			if e != nil && firstErr == nil {
+	// 				log.Printf("storing first error: %s", e.Error())
+	// 				firstErr = e
+	// 				cancel()
+	// 			}
+	// 		}
+	// 	}
+	// }(ctx, &wgErr, out)
 
 	// worker
 	var wg sync.WaitGroup
@@ -78,8 +78,6 @@ func Operate(ctx context.Context, opt Options) error {
 	var wgGen sync.WaitGroup
 	wgGen.Add(1)
 	go func(ctx context.Context, wg *sync.WaitGroup, in chan<- func() error) {
-		defer wg.Done()
-		
 		for i := 0; i < opt.Max; i++ {
 			select {
 			case <-ctx.Done():
@@ -94,13 +92,9 @@ func Operate(ctx context.Context, opt Options) error {
 		}
 
 		close(in)
-	}(ctx, &wgGen, in)
-	wgGen.Wait()
+		wg.Wait()
+		close(out)
+	}(ctx, &wg, in)
 
-	wg.Wait()
-	close(out)
-	
-	wgErr.Wait()
-
-	return firstErr
+	return out
 }
